@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Inner loop: run ttfx against the configured ASCII art until dismissed.
+# Adapted from basecamp/omarchy bin/omarchy-screensaver.
+
+set -u
+
+CONFIG="${OMARCHY_SCREENSAVER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/config}"
+# shellcheck disable=SC1090
+[[ -f ${CONFIG} ]] && source "${CONFIG}"
+
+ART_FILE="${ART_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/art.txt}"
+WINDOW_CLASS="${WINDOW_CLASS:-org.omarchy.screensaver}"
+FRAME_RATE="${FRAME_RATE:-120}"
+CANVAS_WIDTH="${CANVAS_WIDTH:-0}"
+CANVAS_HEIGHT="${CANVAS_HEIGHT:-0}"
+ANCHOR_CANVAS="${ANCHOR_CANVAS:-c}"
+ANCHOR_TEXT="${ANCHOR_TEXT:-c}"
+EFFECT_MODE="${EFFECT_MODE:-random}"
+SINGLE_EFFECT="${SINGLE_EFFECT:-}"
+HIDE_CURSOR="${HIDE_CURSOR:-1}"
+
+class_pattern() {
+  local c="$WINDOW_CLASS"
+  printf '%s' "[${c:0:1}]${c:1}"
+}
+
+in_hyprland() {
+  [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null 2>&1
+}
+
+screensaver_in_focus() {
+  if in_hyprland; then
+    hyprctl activewindow -j 2>/dev/null | jq -e --arg c "$WINDOW_CLASS" '.class == $c' >/dev/null 2>&1
+  else
+    return 0
+  fi
+}
+
+set_cursor_invisible() {
+  local hide="$1"
+  if in_hyprland; then
+    if [[ $hide == 1 ]]; then
+      hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null \
+        || hyprctl keyword cursor:invisible true &>/dev/null || true
+    else
+      hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null \
+        || hyprctl keyword cursor:invisible false &>/dev/null || true
+    fi
+  fi
+}
+
+exit_screensaver() {
+  [[ ${HIDE_CURSOR} == 1 ]] && set_cursor_invisible 0
+  pkill -x ttfx 2>/dev/null || true
+  pkill -f "$(class_pattern)" 2>/dev/null || true
+  exit 0
+}
+
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+printf '\033]11;rgb:00/00/00\007'
+
+[[ ${HIDE_CURSOR} == 1 ]] && set_cursor_invisible 1
+
+tty=$(tty 2>/dev/null || true)
+
+# Terminals allocate the pty at 80x24 and only resize once the compositor
+# has told the window how big it is. ttfx measures once at startup.
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 2))
+  while ((SECONDS < deadline)) && [[ $(stty size 2>/dev/null) == "24 80" ]]; do
+    sleep 0.02
+  done
+}
+
+wait_for_terminal_resize
+
+build_ttfx_args() {
+  TTFX_CMD=(ttfx -i "$ART_FILE"
+    --frame-rate "$FRAME_RATE"
+    --canvas-width "$CANVAS_WIDTH"
+    --canvas-height "$CANVAS_HEIGHT"
+    --anchor-canvas "$ANCHOR_CANVAS"
+    --anchor-text "$ANCHOR_TEXT"
+    --no-eol
+    --no-restore-cursor
+  )
+
+  if [[ ${REUSE_CANVAS:-1} == 1 ]]; then
+    TTFX_CMD+=(--reuse-canvas)
+  fi
+
+  if [[ $EFFECT_MODE == single && -n $SINGLE_EFFECT ]]; then
+    TTFX_CMD+=("$SINGLE_EFFECT")
+  else
+    TTFX_CMD+=(--random-effect)
+    if ((${#INCLUDE_EFFECTS[@]:-0} > 0)); then
+      TTFX_CMD+=(--include-effects "${INCLUDE_EFFECTS[@]}")
+    fi
+    if ((${#EXCLUDE_EFFECTS[@]:-0} > 0)); then
+      TTFX_CMD+=(--exclude-effects "${EXCLUDE_EFFECTS[@]}")
+    fi
+  fi
+
+  if ((${#EXTRA_TTFX_ARGS[@]:-0} > 0)); then
+    TTFX_CMD+=("${EXTRA_TTFX_ARGS[@]}")
+  fi
+}
+
+if [[ ! -f $ART_FILE ]]; then
+  echo "omarchy-screensaver: art file not found: $ART_FILE" >&2
+  exit 1
+fi
+
+build_ttfx_args
+
+while true; do
+  "${TTFX_CMD[@]}" &
+
+  if [[ -n ${tty:-} ]]; then
+    while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null 2>&1; do
+      if read -n1 -t 1 || ! screensaver_in_focus; then
+        exit_screensaver
+      fi
+    done
+  else
+    wait $! || true
+    if read -n1 -t 1; then
+      exit_screensaver
+    fi
+  fi
+done

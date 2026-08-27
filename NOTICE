@@ -1,0 +1,9 @@
+This repository extracts and re-packages the Omarchy screensaver for NixOS.
+
+- Launch scripts, ASCII transcoder, and terminal configs are adapted from
+  basecamp/omarchy (https://github.com/basecamp/omarchy).
+- Runtime effects are provided by ttfx (https://github.com/omacom-io/ttfx),
+  a port of TerminalTextEffects by ChrisBuilds
+  (https://github.com/ChrisBuilds/terminaltexteffects).
+
+Neither Basecamp nor the ttfx authors endorse this packaging.

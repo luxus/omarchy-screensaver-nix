@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Launch one fullscreen screensaver terminal per Hyprland monitor.
+# Adapted from basecamp/omarchy bin/omarchy-launch-screensaver.
+
+set -u
+
+CONFIG="${OMARCHY_SCREENSAVER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/config}"
+# shellcheck disable=SC1090
+[[ -f ${CONFIG} ]] && source "${CONFIG}"
+
+WINDOW_CLASS="${WINDOW_CLASS:-org.omarchy.screensaver}"
+TERMINAL="${TERMINAL:-auto}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-screensaver"
+SHARE_DIR="${SHARE_DIR:-}"
+FONT_SIZE="${FONT_SIZE:-18}"
+FORCE=0
+[[ ${1:-} == force ]] && FORCE=1
+
+class_pattern() {
+  local c="$WINDOW_CLASS"
+  printf '%s' "[${c:0:1}]${c:1}"
+}
+
+notify() {
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a omarchy-screensaver "$@"
+  fi
+}
+
+# Already running
+pgrep -f "$(class_pattern)" >/dev/null 2>&1 && exit 0
+
+# Idle launch is skipped when the user toggled the screensaver off
+if [[ $FORCE -ne 1 && -f $STATE_DIR/off ]]; then
+  exit 1
+fi
+
+resolve_terminal() {
+  local t="$TERMINAL"
+  if [[ $t != auto ]]; then
+    printf '%s' "$t"
+    return
+  fi
+  if command -v xdg-terminal-exec >/dev/null 2>&1; then
+    t=$(xdg-terminal-exec --print-id 2>/dev/null || true)
+  fi
+  t="${t:-${TERM_PROGRAM:-${TERMINAL_EMULATOR:-}}}"
+  case $t in
+  *[Aa]lacritty*) printf 'alacritty' ;;
+  *[Gg]hostty*) printf 'ghostty' ;;
+  *[Ff]oot*) printf 'foot' ;;
+  *[Kk]itty*) printf 'kitty' ;;
+  *)
+    for cand in kitty ghostty foot alacritty; do
+      if command -v "$cand" >/dev/null 2>&1; then
+        printf '%s' "$cand"
+        return
+      fi
+    done
+    printf ''
+    ;;
+  esac
+}
+
+terminal=$(resolve_terminal)
+
+if [[ -z $terminal ]]; then
+  notify "Screensaver needs Alacritty, Foot, Ghostty, or Kitty"
+  echo "omarchy-screensaver-launch: no supported terminal found" >&2
+  exit 1
+fi
+
+inner="${SCREENSAVER_BIN:-omarchy-screensaver}"
+
+# Outside Hyprland: run in the current terminal
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] || ! command -v hyprctl >/dev/null 2>&1; then
+  exec "$inner"
+fi
+
+hypr_focus_monitor() {
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 \
+    || hyprctl dispatch focusmonitor "$1" >/dev/null
+}
+
+hypr_exec() {
+  local command
+  printf -v command '%q ' "$@"
+  hyprctl dispatch "hl.dsp.exec_cmd([[$command]])" >/dev/null 2>&1 \
+    || hyprctl dispatch exec -- bash -lc "$command" >/dev/null
+}
+
+term_config() {
+  local name="$1"
+  local user="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/terminals/$name"
+  if [[ -e $user ]]; then
+    printf '%s' "$user"
+    return
+  fi
+  if [[ -n $SHARE_DIR && -e $SHARE_DIR/terminals/$name ]]; then
+    printf '%s' "$SHARE_DIR/terminals/$name"
+  fi
+}
+
+SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
+
+if [[ -S $SOCKET ]] && command -v socat >/dev/null 2>&1; then
+  exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
+else
+  events=""
+fi
+
+wait_for_screensaver_window() {
+  [[ -z ${events:-} ]] && sleep 0.25 && return 0
+  local line deadline=$((SECONDS + 5))
+  while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
+    [[ $line == openwindow\>\>*,${WINDOW_CLASS},* ]] && return 0
+  done
+  return 0
+}
+
+focused=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .name' | head -n1)
+
+for m in $(hyprctl monitors -j | jq -r '.[].name'); do
+  hypr_focus_monitor "$m"
+
+  case $terminal in
+  alacritty)
+    cfg=$(term_config alacritty.toml)
+    if [[ -n $cfg ]]; then
+      hypr_exec alacritty --class="$WINDOW_CLASS" --config-file "$cfg" -e "$inner"
+    else
+      hypr_exec alacritty --class="$WINDOW_CLASS" -e "$inner"
+    fi
+    ;;
+  ghostty)
+    cfg=$(term_config ghostty)
+    if [[ -n $cfg ]]; then
+      hypr_exec ghostty --class="$WINDOW_CLASS" --config-file="$cfg" --font-size="$FONT_SIZE" -e "$inner"
+    else
+      hypr_exec ghostty --class="$WINDOW_CLASS" --font-size="$FONT_SIZE" -e "$inner"
+    fi
+    ;;
+  foot)
+    cfg=$(term_config foot.ini)
+    if [[ -n $cfg ]]; then
+      hypr_exec foot --app-id="$WINDOW_CLASS" --config="$cfg" -e "$inner"
+    else
+      hypr_exec foot --app-id="$WINDOW_CLASS" -e "$inner"
+    fi
+    ;;
+  kitty)
+    hypr_exec kitty --class="$WINDOW_CLASS" --override font_size="$FONT_SIZE" --override window_padding_width=0 -e "$inner"
+    ;;
+  *)
+    notify "Screensaver only runs in Alacritty, Foot, Ghostty, or Kitty"
+    exit 1
+    ;;
+  esac
+
+  wait_for_screensaver_window
+done
+
+[[ -n $focused ]] && hypr_focus_monitor "$focused"
