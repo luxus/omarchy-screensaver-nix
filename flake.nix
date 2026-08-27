@@ -1,5 +1,5 @@
 {
-  description = "Omarchy's ASCII screensaver, extracted as a NixOS + Home Manager module";
+  description = "Omarchy's ASCII screensaver as a NixOS + Hjem and Home Manager module";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -33,6 +33,9 @@
       inherit (pkgs) ttfx omarchy-screensaver;
       default = omarchy-screensaver;
     });
+
+    hjemModules.default = import ./nix/modules/hjem.nix {inherit self;};
+    hjemModules.omarchyScreensaver = self.hjemModules.default;
 
     homeManagerModules.default = import ./nix/modules/home-manager.nix {inherit self;};
     homeManagerModules.omarchyScreensaver = self.homeManagerModules.default;

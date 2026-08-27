@@ -9,7 +9,7 @@
   system = pkgs.stdenv.hostPlatform.system;
 in {
   options.programs.omarchyScreensaver = {
-    enable = mkEnableOption "Install the Omarchy screensaver package system-wide (Hyprland session still configured via Home Manager)";
+    enable = mkEnableOption "Install the Omarchy screensaver package system-wide (session wiring still lives in the Hjem or Home Manager module)";
 
     package = mkOption {
       type = types.package;

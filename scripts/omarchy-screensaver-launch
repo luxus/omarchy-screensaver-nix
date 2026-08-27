@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Launch one fullscreen screensaver terminal per Hyprland monitor.
-# Adapted from basecamp/omarchy bin/omarchy-launch-screensaver.
+# Launch one fullscreen screensaver terminal per monitor.
+# KWin (Plasma / Noctalia) is the default path; Hyprland is still supported.
 
 set -u
 
@@ -10,6 +10,7 @@ CONFIG="${OMARCHY_SCREENSAVER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-
 
 WINDOW_CLASS="${WINDOW_CLASS:-org.omarchy.screensaver}"
 TERMINAL="${TERMINAL:-auto}"
+COMPOSITOR="${COMPOSITOR:-auto}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-screensaver"
 SHARE_DIR="${SHARE_DIR:-}"
 FONT_SIZE="${FONT_SIZE:-18}"
@@ -62,6 +63,29 @@ resolve_terminal() {
   esac
 }
 
+detect_compositor() {
+  local c="$COMPOSITOR"
+  case $c in
+  kwin | hyprland)
+    printf '%s' "$c"
+    return
+    ;;
+  esac
+  if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v hyprctl >/dev/null 2>&1; then
+    printf 'hyprland'
+    return
+  fi
+  if [[ ${XDG_CURRENT_DESKTOP:-} == *KDE* ]] ||
+    [[ ${XDG_SESSION_DESKTOP:-} == *plasma* ]] ||
+    [[ ${KDE_FULL_SESSION:-} == true ]] ||
+    pgrep -x kwin_wayland >/dev/null 2>&1 ||
+    pgrep -x kwin_x11 >/dev/null 2>&1; then
+    printf 'kwin'
+    return
+  fi
+  printf 'none'
+}
+
 terminal=$(resolve_terminal)
 
 if [[ -z $terminal ]]; then
@@ -71,11 +95,88 @@ if [[ -z $terminal ]]; then
 fi
 
 inner="${SCREENSAVER_BIN:-omarchy-screensaver}"
+compositor=$(detect_compositor)
 
-# Outside Hyprland: run in the current terminal
-if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] || ! command -v hyprctl >/dev/null 2>&1; then
-  exec "$inner"
-fi
+term_config() {
+  local name="$1"
+  local user="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/terminals/$name"
+  local share=""
+  [[ -n $SHARE_DIR && -e $SHARE_DIR/terminals/$name ]] && share="$SHARE_DIR/terminals/$name"
+  if [[ -e $user ]]; then
+    printf '%s' "$user"
+    return
+  fi
+  if [[ -n $share ]]; then
+    mkdir -p "$(dirname "$user")"
+    # Writable copy so Noctalia user templates can replace it on the next palette apply.
+    if cp -n "$share" "$user" 2>/dev/null; then
+      printf '%s' "$user"
+      return
+    fi
+    printf '%s' "$share"
+  fi
+}
+
+# TERM_CMD is filled by build_term_cmd. Extra leading args (e.g. kitty --detach)
+# can be passed as $1..
+build_term_cmd() {
+  TERM_CMD=()
+  local extra=()
+  if [[ ${1:-} == detach ]]; then
+    extra=(detach)
+  fi
+  local cfg
+  case $terminal in
+  alacritty)
+    cfg=$(term_config alacritty.toml)
+    TERM_CMD=(alacritty --class="$WINDOW_CLASS")
+    [[ -n $cfg ]] && TERM_CMD+=(--config-file "$cfg")
+    TERM_CMD+=(-e "$inner")
+    ;;
+  ghostty)
+    cfg=$(term_config ghostty)
+    TERM_CMD=(ghostty --class="$WINDOW_CLASS" --gtk-single-instance=false)
+    [[ -n $cfg ]] && TERM_CMD+=(--config-file="$cfg")
+    TERM_CMD+=(--font-size="$FONT_SIZE" -e "$inner")
+    ;;
+  foot)
+    cfg=$(term_config foot.ini)
+    TERM_CMD=(foot --app-id="$WINDOW_CLASS")
+    [[ -n $cfg ]] && TERM_CMD+=(--config="$cfg")
+    TERM_CMD+=(-e "$inner")
+    ;;
+  kitty)
+    cfg=$(term_config kitty.conf)
+    TERM_CMD=(kitty)
+    [[ ${extra[0]:-} == detach ]] && TERM_CMD+=(--detach)
+    [[ -n $cfg ]] && TERM_CMD+=(--config "$cfg")
+    TERM_CMD+=(--class="$WINDOW_CLASS" --start-as-fullscreen
+      --override font_size="$FONT_SIZE"
+      --override window_padding_width=0
+      --override hide_window_decorations=yes
+      --override confirm_os_window_close=0
+      --override remember_window_size=no
+      --override allow_remote_control=no
+      -e "$inner")
+    ;;
+  *)
+    notify "Screensaver only runs in Alacritty, Foot, Ghostty, or Kitty"
+    exit 1
+    ;;
+  esac
+}
+
+spawn_detached() {
+  build_term_cmd detach
+  if [[ $terminal == kitty ]]; then
+    "${TERM_CMD[@]}"
+  else
+    nohup "${TERM_CMD[@]}" >/dev/null 2>&1 &
+    disown $! 2>/dev/null || true
+  fi
+}
+
+# --- Hyprland --------------------------------------------------------------
 
 hypr_focus_monitor() {
   hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 \
@@ -89,75 +190,89 @@ hypr_exec() {
     || hyprctl dispatch exec -- bash -lc "$command" >/dev/null
 }
 
-term_config() {
-  local name="$1"
-  local user="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-screensaver/terminals/$name"
-  if [[ -e $user ]]; then
-    printf '%s' "$user"
+launch_hyprland() {
+  local SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
+  local events=""
+  if [[ -S $SOCKET ]] && command -v socat >/dev/null 2>&1; then
+    exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
+  fi
+
+  wait_for_screensaver_window() {
+    [[ -z ${events:-} ]] && sleep 0.25 && return 0
+    local line deadline=$((SECONDS + 5))
+    while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
+      [[ $line == openwindow\>\>*,${WINDOW_CLASS},* ]] && return 0
+    done
+    return 0
+  }
+
+  local focused
+  focused=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .name' | head -n1)
+  build_term_cmd
+
+  local m
+  for m in $(hyprctl monitors -j | jq -r '.[].name'); do
+    hypr_focus_monitor "$m"
+    hypr_exec "${TERM_CMD[@]}"
+    wait_for_screensaver_window
+  done
+
+  [[ -n $focused ]] && hypr_focus_monitor "$focused"
+}
+
+# --- KWin / Plasma ---------------------------------------------------------
+
+kwin_outputs() {
+  if ! command -v kscreen-doctor >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    printf 'primary\n'
     return
   fi
-  if [[ -n $SHARE_DIR && -e $SHARE_DIR/terminals/$name ]]; then
-    printf '%s' "$SHARE_DIR/terminals/$name"
+  local json names
+  json=$(kscreen-doctor -j 2>/dev/null || true)
+  if [[ -z $json ]]; then
+    printf 'primary\n'
+    return
+  fi
+  names=$(jq -r '
+    (if type == "object" and has("outputs") then .outputs[]
+     elif type == "array" then .[]
+     else empty end)
+    | select((.enabled // true) and (.connected // true))
+    | (.name // (.id|tostring) // "output")
+  ' <<<"$json" 2>/dev/null || true)
+  if [[ -z $names ]]; then
+    printf 'primary\n'
+  else
+    printf '%s\n' "$names"
   fi
 }
 
-SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
-
-if [[ -S $SOCKET ]] && command -v socat >/dev/null 2>&1; then
-  exec {events}< <(socat -U - "UNIX-CONNECT:$SOCKET")
-else
-  events=""
-fi
-
-wait_for_screensaver_window() {
-  [[ -z ${events:-} ]] && sleep 0.25 && return 0
-  local line deadline=$((SECONDS + 5))
-  while ((SECONDS < deadline)) && IFS= read -r -t $((deadline - SECONDS)) -u "$events" line; do
-    [[ $line == openwindow\>\>*,${WINDOW_CLASS},* ]] && return 0
+launch_kwin() {
+  local outputs out count=0
+  mapfile -t outputs < <(kwin_outputs)
+  ((${#outputs[@]})) || outputs=(primary)
+  for out in "${outputs[@]}"; do
+    spawn_detached
+    count=$((count + 1))
+    # Give KWin a beat to map each window before the next spawn.
+    sleep 0.15
   done
-  return 0
+  # Unused on purpose: output names are compositor-side; we spawn one
+  # fullscreen terminal per enabled output and let KWin place them.
+  : "$out" "$count"
 }
 
-focused=$(hyprctl monitors -j | jq -r '.[] | select(.focused==true) | .name' | head -n1)
+# --- dispatch --------------------------------------------------------------
 
-for m in $(hyprctl monitors -j | jq -r '.[].name'); do
-  hypr_focus_monitor "$m"
-
-  case $terminal in
-  alacritty)
-    cfg=$(term_config alacritty.toml)
-    if [[ -n $cfg ]]; then
-      hypr_exec alacritty --class="$WINDOW_CLASS" --config-file "$cfg" -e "$inner"
-    else
-      hypr_exec alacritty --class="$WINDOW_CLASS" -e "$inner"
-    fi
-    ;;
-  ghostty)
-    cfg=$(term_config ghostty)
-    if [[ -n $cfg ]]; then
-      hypr_exec ghostty --class="$WINDOW_CLASS" --config-file="$cfg" --font-size="$FONT_SIZE" -e "$inner"
-    else
-      hypr_exec ghostty --class="$WINDOW_CLASS" --font-size="$FONT_SIZE" -e "$inner"
-    fi
-    ;;
-  foot)
-    cfg=$(term_config foot.ini)
-    if [[ -n $cfg ]]; then
-      hypr_exec foot --app-id="$WINDOW_CLASS" --config="$cfg" -e "$inner"
-    else
-      hypr_exec foot --app-id="$WINDOW_CLASS" -e "$inner"
-    fi
-    ;;
-  kitty)
-    hypr_exec kitty --class="$WINDOW_CLASS" --override font_size="$FONT_SIZE" --override window_padding_width=0 -e "$inner"
-    ;;
-  *)
-    notify "Screensaver only runs in Alacritty, Foot, Ghostty, or Kitty"
-    exit 1
-    ;;
-  esac
-
-  wait_for_screensaver_window
-done
-
-[[ -n $focused ]] && hypr_focus_monitor "$focused"
+case $compositor in
+hyprland)
+  launch_hyprland
+  ;;
+kwin)
+  launch_kwin
+  ;;
+*)
+  # Nested in an existing terminal (ssh, tty, unknown compositor).
+  exec "$inner"
+  ;;
+esac

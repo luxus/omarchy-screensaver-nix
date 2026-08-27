@@ -16,7 +16,7 @@
 }:
 stdenvNoCC.mkDerivation {
   pname = "omarchy-screensaver";
-  version = "1.0.0";
+  version = "1.1.0";
 
   src = ../..;
 
@@ -55,7 +55,7 @@ stdenvNoCC.mkDerivation {
   '';
 
   meta = {
-    description = "Omarchy ASCII screensaver for Hyprland, packaged for NixOS";
+    description = "Omarchy ASCII screensaver for KWin + Noctalia (Hyprland optional), packaged for NixOS / Hjem";
     homepage = "https://github.com/luxus/omarchy-screensaver-nix";
     license = lib.licenses.mit;
     mainProgram = "omarchy-screensaver-launch";

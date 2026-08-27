@@ -1,22 +1,22 @@
 # omarchy-screensaver-nix
 
-Omarchy's ASCII screensaver, extracted from [basecamp/omarchy](https://github.com/basecamp/omarchy) so you can import it into a NixOS / Home Manager config.
+Omarchy's ASCII screensaver, extracted from [basecamp/omarchy](https://github.com/basecamp/omarchy) so you can import it into a NixOS config via **Hjem / Hjem Rum and/or Home Manager**. Same `programs.omarchyScreensaver` options either way.
 
-Idle Hyprland session → fullscreen terminal per monitor → your logo (or any PNG/SVG converted to braille) running through [ttfx](https://github.com/omacom-io/ttfx) effects. Any key or mouse movement exits.
+Idle session → fullscreen terminal per monitor → your logo (or any PNG/SVG converted to braille) running through [ttfx](https://github.com/omacom-io/ttfx) effects. Colors follow the live [Noctalia](https://github.com/noctalia-dev/noctalia) v5 palette by default. Any key or mouse movement exits.
 
-This is **not** a port of the whole Omarchy desktop. It is the screensaver: launch scripts, terminal configs, Hyprland window rules, hypridle listeners, and a Home Manager module for every knob Omarchy exposes.
+This is **not** a port of the whole Omarchy desktop. It is the screensaver: launch scripts, terminal configs, KWin/Plasma shortcut, Noctalia v5 idle drop-in, Hyprland rules, and a declarative module for every knob Omarchy exposes.
 
 ## What you get
 
 | Piece | Role |
 | --- | --- |
 | `omarchy-screensaver` | Inner loop: `ttfx` against your art until dismissed |
-| `omarchy-screensaver-launch` | One fullscreen terminal per Hyprland monitor |
+| `omarchy-screensaver-launch` | One fullscreen terminal per monitor (KWin or Hyprland) |
 | `omarchy-screensaver-toggle` | Disable the idle screensaver without removing the module |
 | `omarchy-screensaver-ascii` | PNG/SVG → braille or block glyphs (ImageMagick) |
 | `programs.omarchyScreensaver` | Declarative art, effects, idle, bind, colors |
 
-Requires a Hyprland session and one of **Kitty, Ghostty, Foot, or Alacritty**.
+Designed for **KWin + Noctalia v5** and **Hyprland + hypridle**. `compositor = "auto"` installs both session files; launch detects which compositor is running. Needs one of **Kitty, Ghostty, Foot, or Alacritty** (Kitty is the smoothest on KWin: `--start-as-fullscreen`).
 
 ## Add the flake
 
@@ -27,56 +27,73 @@ Requires a Hyprland session and one of **Kitty, Ghostty, Foot, or Alacritty**.
 }
 ```
 
-### Home Manager (recommended)
+### Hjem / Hjem Rum
 
-Works with standalone HM or HM-as-a-NixOS-module. For a flake-parts setup like `luxus/flakes`:
-
-```nix
-# nixosConfigurations.<host> modules
-inputs.home-manager.nixosModules.home-manager
-{
-  home-manager.sharedModules = [
-    inputs.omarchy-screensaver.homeManagerModules.default
-  ];
-}
-```
-
-Then in the user module (`hosts/vanessa/home.nix`):
+Same extraModule slot Noctalia uses. `rum.programs.omarchyScreensaver` is an alias of `programs.omarchyScreensaver`.
 
 ```nix
-{
-  programs.omarchyScreensaver = {
-    enable = true;
-    terminal = "kitty"; # or ghostty / foot / alacritty / auto
+hjem.extraModules = [
+  inputs.hjem-rum.hjemModules.default          # if you use rum.*
+  inputs.omarchy-screensaver.hjemModules.default
+];
 
-    # Pick one. Priority: image > file > text > bundled Omarchy wordmark.
-    art.image = ./logo.png;          # PNG or SVG, converted at build time
-    # art.file = ./screensaver.txt;
-    # art.text = ''hello'';
+hjem.users.<name>.programs.omarchyScreensaver = {
+  enable = true;
+  compositor = "auto"; # kwin + hyprland files; launch detects the session
+  terminal = "kitty";
 
-    art.width = 80;
-    art.height = 26;
-    art.mode = "braille"; # or "block"
-    art.threshold = 50;   # raise if the conversion is a blob
-    # art.invert = true;  # light logo on dark background
+  # Pick one. Priority: image > file > text > bundled Omarchy wordmark.
+  art.image = ./logo.png;          # PNG or SVG, converted at build time
+  # art.file = ./screensaver.txt;
+  # art.text = ''hello'';
 
-    effects = {
-      mode = "random"; # or "single"
-      # single = "matrix";
-      # include = [ "matrix" "rain" "decrypt" "beams" "wipe" ];
-      exclude = [ "bouncyballs" ];
-    };
+  art.width = 80;
+  art.height = 26;
+  art.mode = "braille"; # or "block"
+  art.threshold = 50;   # raise if the conversion is a blob
+  # art.invert = true;  # light logo on dark background
 
-    idle = {
-      timeout = 150;       # seconds since idle began
-      lockTimeout = 300;   # independent of screensaver
-      lockCommand = "loginctl lock-session";
-    };
-
-    bind = "SUPER, Escape"; # force-start even if idle screensaver is off
+  effects = {
+    mode = "random"; # or "single"
+    # single = "matrix";
+    # include = [ "matrix" "rain" "decrypt" "beams" "wipe" ];
+    exclude = [ "bouncyballs" ];
   };
-}
+
+  idle = {
+    backend = "noctalia"; # drop-in ~/.config/noctalia/zz-omarchy-screensaver.toml
+    timeout = 150;        # seconds since idle began
+    lockTimeout = 300;    # native Noctalia lock; null to skip
+  };
+
+  bind = "Meta+Esc";            # Plasma X-KDE-Shortcuts
+  hyprland.bind = "SUPER, Escape";
+
+  appearance.noctalia.enable = true;           # default — follow the Hjem/Noctalia palette
+  appearance.noctalia.background = "terminal_background";
+  appearance.noctalia.foreground = "terminal_foreground"; # or "primary"
+};
 ```
+
+Noctalia v5 merges every `*.toml` in `~/.config/noctalia/` alphabetically. The module writes `zz-omarchy-screensaver.toml` so it only touches idle **and** screensaver user templates — your bar, theme, and lock styling stay yours.
+
+The idle drop-in is:
+
+```toml
+[idle]
+behavior_order = ["screensaver", "lock", "screen-off", "suspend"]
+
+[idle.behavior.screensaver]
+timeout = 150
+action = "command"
+command = "omarchy-screensaver-launch"
+
+[idle.behavior.lock]
+timeout = 300
+action = "lock"
+```
+
+Set `idle.writeBehaviorOrder = false` if you already own `behavior_order`. Unlisted names are appended, so without that list the screensaver would run *after* lock.
 
 ### NixOS module (package + overlay only)
 
@@ -87,19 +104,29 @@ Then in the user module (`hosts/vanessa/home.nix`):
 }
 ```
 
-Session wiring (window rules, hypridle, art) still lives in Home Manager.
+Session wiring (art, idle, shortcut) still lives in the Hjem or Home Manager module.
+
+### Home Manager
+
+```nix
+home-manager.sharedModules = [
+  inputs.omarchy-screensaver.homeManagerModules.default
+];
+```
+
+Then the same `programs.omarchyScreensaver = { ... };` attrset as above. See [examples/home.nix](examples/home.nix).
 
 ## Module options
 
-All options live under `programs.omarchyScreensaver`.
+All options live under `programs.omarchyScreensaver` (Hjem extraModule, rum alias, or Home Manager).
 
 ### Art
 
 | Option | Default | Notes |
 | --- | --- | --- |
 | `art.text` | `null` | Inline ASCII |
-| `art.file` | `null` | Path to a `.txt` |
-| `art.image` | `null` | PNG/SVG, converted with `omarchy-screensaver-ascii` |
+| `art.file` | `path` | Path to a `.txt` |
+| `art.image` | `path` | PNG/SVG, converted with `omarchy-screensaver-ascii` |
 | `art.width` / `art.height` | `80` / `26` | Terminal cells for image conversion |
 | `art.mode` | `"braille"` | `"block"` for `█▀▄` |
 | `art.threshold` | `50` | 0–100; the usual fix for a muddy conversion |
@@ -114,65 +141,92 @@ All options live under `programs.omarchyScreensaver`.
 
 Effects: `beams`, `binarypath`, `blackhole`, `bouncyballs`, `bubbles`, `burn`, `colorshift`, `crumble`, `decrypt`, `errorcorrect`, `expand`, `fireworks`, `highlight`, `laseretch`, `matrix`, `middleout`, `orbittingvolley`, `overflow`, `pour`, `print`, `rain`, `randomsequence`, `rings`, `scattered`, `slice`, `slide`, `smoke`, `spotlights`, `spray`, `swarm`, `sweep`, `synthgrid`, `thunderstorm`, `unstable`, `vhstape`, `waves`, `wipe`.
 
+### Noctalia themes
+
+`appearance.noctalia.enable` (default **true**) registers four [Noctalia v5 user templates](https://docs.noctalia.dev/noctalia/theming/app-theming/):
+
+```toml
+[theme.templates.user.omarchy_screensaver_kitty]
+input_path  = "$XDG_CONFIG_HOME/omarchy-screensaver/templates/kitty.conf"
+output_path = "$XDG_CONFIG_HOME/omarchy-screensaver/terminals/kitty.conf"
+```
+
+Same for Ghostty, Alacritty, and Foot. When you change the Hjem/Noctalia palette — builtin (Tokyo Night, Catppuccin, Nord, …), a community palette, or wallpaper Material You — Noctalia re-renders those terminal configs. The screensaver does **not** need a rebuild.
+
+Tokens (see [template reference](https://docs.noctalia.dev/noctalia/theming/templates/)):
+
+| Option | Default | Other useful values |
+| --- | --- | --- |
+| `appearance.noctalia.background` | `terminal_background` | `surface`, `background` |
+| `appearance.noctalia.foreground` | `terminal_foreground` | `primary`, `on_surface`, `on_background` |
+
+Set `appearance.noctalia.enable = false` to bake `appearance.background` / `foreground` hex at build time instead.
+
+Confirm Noctalia sees the templates:
+
+```bash
+noctalia theme --list-templates
+```
+
 ### Idle
 
-Same model as Omarchy's `shell.json`: both timeouts are **seconds since idle began**, not chained.
+Timeouts are **seconds since idle began**, not chained — same model as Omarchy's `shell.json` and Noctalia v5.
 
-Defaults: screensaver at 150s, lock at 300s. Dismissing the screensaver cancels the pending lock (activity). `omarchy-screensaver-toggle` writes `~/.local/state/omarchy-screensaver/off` so hypridle launches become no-ops; `omarchy-screensaver-launch force` still works (bound to Super+Esc by default).
+| Option | Default | Notes |
+| --- | --- | --- |
+| `idle.backend` | `"noctalia"` | `"hypridle"` or `"none"` |
+| `idle.timeout` | `150` | Screensaver |
+| `idle.lockTimeout` | `300` | Native Noctalia lock, or hypridle `lockCommand` |
+| `idle.manageLock` | `true` | Write the lock behavior |
+| `idle.writeBehaviorOrder` | `true` | Screensaver before lock in Noctalia |
 
-`idle.manageHypridle` appends listeners through `services.hypridle.extraConfig` so it does not clobber your existing `settings.listener` list. Set it `false` if you want to wire:
+`omarchy-screensaver-toggle` writes `~/.local/state/omarchy-screensaver/off` so idle launches become no-ops; `omarchy-screensaver-launch force` still works (Meta+Esc by default).
 
-```
-timeout = 150
-on-timeout = omarchy-screensaver-launch
-```
+### KWin / Plasma
 
-yourself.
+Kitty and Ghostty start fullscreen themselves. Foot/Alacritty rely on the same app-id plus whatever window rule you already use.
+
+`bind = "Meta+Esc"` installs `~/.local/share/applications/omarchy-screensaver.desktop` with `X-KDE-Shortcuts`. Plasma picks that up as a custom application shortcut. Re-login or `kquitapp6 kglobalaccel` if it does not bind on first switch.
 
 ### Hyprland
 
-Writes `~/.config/hypr/omarchy-screensaver.conf` and, when the HM Hyprland module is present, `source`s it from `extraConfig`.
+`compositor = "auto"` (the default) or `"hyprland"` writes `~/.config/hypr/omarchy-screensaver.conf`. The Home Manager module `source`s it from `extraConfig` when the HM Hyprland module is on; under Hjem, source it yourself.
 
-Hyprland **0.53+** needs the new rule syntax (`ruleSyntax = "new"`, the default):
-
-```
-windowrule = match:class org.omarchy.screensaver, float on
-windowrule = match:class org.omarchy.screensaver, fullscreen on
-```
-
-Both `float` and `fullscreen` are required — fullscreen of a tiled window is just a big tile.
-
-For Hyprland `< 0.53` set `hyprland.ruleSyntax = "legacy"`.
+Hyprland **0.53+** needs the new rule syntax (`ruleSyntax = "new"`, the default). Both `float` and `fullscreen` are required. For Hyprland `< 0.53` set `hyprland.ruleSyntax = "legacy"`. Hyprland bind is `hyprland.bind = "SUPER, Escape"` — a different string from the Plasma shortcut.
 
 ## Commands
 
 ```bash
 omarchy-screensaver-launch          # idle entry; no-ops if toggled off
-omarchy-screensaver-launch force    # Super+Esc / menu
+omarchy-screensaver-launch force    # Meta+Esc / menu
 omarchy-screensaver-toggle          # enable / disable idle screensaver
 omarchy-screensaver-toggle status
 omarchy-screensaver-ascii logo.svg ~/.config/omarchy-screensaver/art.txt --width 100
 ```
 
-## Stylix
+## Manual / Stylix hex
 
-Point colors at your scheme if you want the terminal to match:
+If you are not using Noctalia templates, bake colors at build time:
 
 ```nix
 programs.omarchyScreensaver.appearance = {
-  background = config.lib.stylix.colors.base00;
-  foreground = config.lib.stylix.colors.base05;
+  noctalia.enable = false;
+  background = "1a1b26";
+  foreground = "c0caf5";
 };
 ```
 
 ## Layout on disk
 
 ```
-~/.config/omarchy-screensaver/art.txt      # generated art
-~/.config/omarchy-screensaver/config       # env sourced by the scripts
-~/.config/omarchy-screensaver/terminals/   # alacritty / ghostty / foot
-~/.config/hypr/omarchy-screensaver.conf    # window rules + bind
-~/.local/state/omarchy-screensaver/off     # toggle flag
+~/.config/omarchy-screensaver/art.txt                 # generated art
+~/.config/omarchy-screensaver/config                  # env sourced by the scripts
+~/.config/omarchy-screensaver/templates/              # Noctalia user-template sources
+~/.config/omarchy-screensaver/terminals/              # rendered (or baked) terminal configs
+~/.config/noctalia/zz-omarchy-screensaver.toml        # idle drop-in + theme.templates.user.*
+~/.config/hypr/omarchy-screensaver.conf               # compositor auto / hyprland
+~/.local/share/applications/omarchy-screensaver.desktop
+~/.local/state/omarchy-screensaver/off                # toggle flag
 ```
 
 ## Credits
