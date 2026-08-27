@@ -12,6 +12,7 @@
   pkg = cfg.package;
   hasHyprlandHM = options.wayland ? windowManager && options.wayland.windowManager ? hyprland;
   hasHypridle = options.services ? hypridle;
+  hyprlandEnabled = hasHyprlandHM && config.wayland.windowManager.hyprland.enable;
 
   effectNames = [
     "beams"
@@ -442,12 +443,12 @@ in {
 
       home.sessionVariables.OMARCHY_SCREENSAVER_CONFIG = "${cfg.configDir}/config";
     }
-    (mkIf (cfg.hyprland.enable && cfg.hyprland.injectExtraConfig && hasHyprlandHM) {
+    (mkIf (cfg.hyprland.enable && cfg.hyprland.injectExtraConfig && hyprlandEnabled) {
       wayland.windowManager.hyprland.extraConfig = lib.mkAfter ''
         source = ${config.xdg.configHome}/hypr/omarchy-screensaver.conf
       '';
     })
-    (mkIf (cfg.idle.enable && cfg.idle.manageHypridle && hasHypridle) {
+    (mkIf (cfg.idle.enable && cfg.idle.manageHypridle && hasHypridle && hyprlandEnabled) {
       services.hypridle.enable = mkDefault true;
       services.hypridle.extraConfig = lib.mkAfter hypridleSnippet;
     })
