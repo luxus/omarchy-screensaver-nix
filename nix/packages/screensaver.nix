@@ -13,6 +13,7 @@
   procps,
   util-linux,
   libnotify,
+  kdePackages,
 }:
 stdenvNoCC.mkDerivation {
   pname = "omarchy-screensaver";
@@ -41,7 +42,7 @@ stdenvNoCC.mkDerivation {
       --set-default SHARE_DIR $out/share/omarchy-screensaver
 
     wrapProgram $out/bin/omarchy-screensaver-launch \
-      --prefix PATH : ${lib.makeBinPath [ttfx jq socat procps coreutils gnugrep gnused libnotify]} \
+      --prefix PATH : ${lib.makeBinPath [ttfx jq socat procps coreutils gnugrep gnused libnotify kdePackages.qttools]} \
       --set-default SHARE_DIR $out/share/omarchy-screensaver \
       --set-default SCREENSAVER_BIN $out/bin/omarchy-screensaver
 

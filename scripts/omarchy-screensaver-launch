@@ -248,19 +248,63 @@ kwin_outputs() {
   fi
 }
 
+kwin_qdbus() {
+  if command -v qdbus6 >/dev/null 2>&1; then
+    qdbus6 "$@"
+  elif command -v qdbus >/dev/null 2>&1; then
+    qdbus "$@"
+  else
+    return 1
+  fi
+}
+
+# Ghostty/GTK cannot pick a Wayland output. KWin maps every new fullscreen
+# window onto the focused screen, so we send each screensaver window to a
+# named output after it maps.
+kwin_place_on_outputs() {
+  local -n _outs=$1
+  kwin_qdbus org.kde.KWin /Scripting >/dev/null 2>&1 || return 0
+  local js name num
+  local targets
+  targets=$(printf '%s\n' "${_outs[@]}" | jq -R . | jq -s .)
+  js=$(mktemp "${TMPDIR:-/tmp}/omarchy-ss.XXXXXX.js")
+  name="omarchy-ss-$$"
+  cat >"$js" <<EOF
+const targets = ${targets};
+const cls = $(jq -n --arg c "$WINDOW_CLASS" '$c');
+const screens = {};
+for (const s of workspace.screens) screens[String(s.name)] = s;
+const wins = workspace.windowList().filter((w) => String(w.resourceClass || "") === cls);
+for (let i = 0; i < wins.length && i < targets.length; i++) {
+  const s = screens[targets[i]];
+  if (!s) continue;
+  if (typeof workspace.sendClientToScreen === "function") workspace.sendClientToScreen(wins[i], s);
+  else wins[i].output = s;
+  wins[i].fullScreen = true;
+}
+EOF
+  num=$(kwin_qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$js" "$name" 2>/dev/null || true)
+  if [[ -n ${num:-} && $num != *-1 ]]; then
+    kwin_qdbus org.kde.KWin /Scripting/Script"${num}" org.kde.kwin.Script.run >/dev/null 2>&1 || true
+    kwin_qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "$name" >/dev/null 2>&1 || true
+  fi
+  rm -f "$js"
+}
+
 launch_kwin() {
-  local outputs out count=0
+  local outputs out
   mapfile -t outputs < <(kwin_outputs)
   ((${#outputs[@]})) || outputs=(primary)
   for out in "${outputs[@]}"; do
     spawn_detached
-    count=$((count + 1))
-    # Give KWin a beat to map each window before the next spawn.
     sleep 0.15
   done
-  # Unused on purpose: output names are compositor-side; we spawn one
-  # fullscreen terminal per enabled output and let KWin place them.
-  : "$out" "$count"
+  local _try
+  for _try in 1 2 3 4 5; do
+    kwin_place_on_outputs outputs
+    sleep 0.2
+  done
+  : "$out"
 }
 
 # --- dispatch --------------------------------------------------------------
