@@ -238,6 +238,7 @@ let
       timeout = ${toString cfg.idle.timeout}
       action = "command"
       command = ${builtins.toJSON "${pkg}/bin/omarchy-screensaver-launch"}
+      resume_command = "noctalia msg bar-show >/dev/null 2>&1; noctalia msg dock-show >/dev/null 2>&1"
 
       ${optionalString (cfg.idle.manageLock && cfg.idle.lockTimeout != null) ''
         [idle.behavior.lock]

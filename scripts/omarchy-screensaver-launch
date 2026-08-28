@@ -28,6 +28,18 @@ notify() {
   fi
 }
 
+hide_desktop_chrome() {
+  command -v noctalia >/dev/null 2>&1 || return 0
+  noctalia msg bar-hide >/dev/null 2>&1 || true
+  noctalia msg dock-hide >/dev/null 2>&1 || true
+}
+
+show_desktop_chrome() {
+  command -v noctalia >/dev/null 2>&1 || return 0
+  noctalia msg bar-show >/dev/null 2>&1 || true
+  noctalia msg dock-show >/dev/null 2>&1 || true
+}
+
 # Already running
 pgrep -f "$(class_pattern)" >/dev/null 2>&1 && exit 0
 
@@ -135,7 +147,7 @@ build_term_cmd() {
     ;;
   ghostty)
     cfg=$(term_config ghostty)
-    TERM_CMD=(ghostty --class="$WINDOW_CLASS" --gtk-single-instance=false)
+    TERM_CMD=(ghostty --class="$WINDOW_CLASS" --gtk-single-instance=false --cursor-opacity=0)
     [[ -n $cfg ]] && TERM_CMD+=(--config-file="$cfg")
     TERM_CMD+=(--font-size="$FONT_SIZE" -e "$inner")
     ;;
@@ -168,11 +180,18 @@ build_term_cmd() {
 
 spawn_detached() {
   build_term_cmd detach
+  local -a envcmd=(env)
+  if [[ -n ${SHARE_DIR:-} && -d $SHARE_DIR/icons ]]; then
+    envcmd+=(
+      XCURSOR_THEME=omarchy-ss-blank
+      XCURSOR_PATH="$SHARE_DIR/icons${XCURSOR_PATH:+:$XCURSOR_PATH}"
+    )
+  fi
   if [[ $terminal == kitty ]]; then
-    "${TERM_CMD[@]}"
+    "${envcmd[@]}" "${TERM_CMD[@]}"
   else
     mkdir -p "$STATE_DIR"
-    nohup "${TERM_CMD[@]}" >>"$STATE_DIR/last-launch.log" 2>&1 &
+    nohup "${envcmd[@]}" "${TERM_CMD[@]}" >>"$STATE_DIR/last-launch.log" 2>&1 &
     disown $! 2>/dev/null || true
   fi
 }
@@ -192,6 +211,7 @@ hypr_exec() {
 }
 
 launch_hyprland() {
+  hide_desktop_chrome
   local SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
   local events=""
   if [[ -S $SOCKET ]] && command -v socat >/dev/null 2>&1; then
@@ -258,29 +278,26 @@ kwin_qdbus() {
   fi
 }
 
-# Ghostty/GTK cannot pick a Wayland output. KWin maps every new fullscreen
-# window onto the focused screen, so we send each screensaver window to a
-# named output after it maps.
+# Ghostty/GTK cannot pick a Wayland output. After spawn, assign each window
+# to a live KWin screen (workspace.screens — current monitors, not a snapshot).
 kwin_place_on_outputs() {
-  local -n _outs=$1
   kwin_qdbus org.kde.KWin /Scripting >/dev/null 2>&1 || return 0
   local js name num
-  local targets
-  targets=$(printf '%s\n' "${_outs[@]}" | jq -R . | jq -s .)
   js=$(mktemp "${TMPDIR:-/tmp}/omarchy-ss.XXXXXX.js")
   name="omarchy-ss-$$"
   cat >"$js" <<EOF
-const targets = ${targets};
 const cls = $(jq -n --arg c "$WINDOW_CLASS" '$c');
-const screens = {};
-for (const s of workspace.screens) screens[String(s.name)] = s;
+const screens = workspace.screens;
 const wins = workspace.windowList().filter((w) => String(w.resourceClass || "") === cls);
-for (let i = 0; i < wins.length && i < targets.length; i++) {
-  const s = screens[targets[i]];
-  if (!s) continue;
-  if (typeof workspace.sendClientToScreen === "function") workspace.sendClientToScreen(wins[i], s);
-  else wins[i].output = s;
+for (let i = 0; i < screens.length; i++) {
+  if (!wins[i]) break;
+  if (typeof workspace.sendClientToScreen === "function") workspace.sendClientToScreen(wins[i], screens[i]);
+  else wins[i].output = screens[i];
   wins[i].fullScreen = true;
+  wins[i].keepAbove = true;
+  wins[i].onAllDesktops = true;
+  wins[i].skipTaskbar = true;
+  wins[i].noBorder = true;
 }
 EOF
   num=$(kwin_qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript "$js" "$name" 2>/dev/null || true)
@@ -295,15 +312,19 @@ launch_kwin() {
   local outputs out
   mapfile -t outputs < <(kwin_outputs)
   ((${#outputs[@]})) || outputs=(primary)
+  hide_desktop_chrome
   for out in "${outputs[@]}"; do
     spawn_detached
     sleep 0.15
   done
   local _try
   for _try in 1 2 3 4 5; do
-    kwin_place_on_outputs outputs
+    kwin_place_on_outputs
     sleep 0.2
   done
+  if ! pgrep -f "$(class_pattern)" >/dev/null 2>&1; then
+    show_desktop_chrome
+  fi
   : "$out"
 }
 

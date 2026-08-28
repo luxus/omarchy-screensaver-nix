@@ -66,9 +66,16 @@ set_mouse_reporting() {
   fi
 }
 
+show_desktop_chrome() {
+  command -v noctalia >/dev/null 2>&1 || return 0
+  noctalia msg bar-show >/dev/null 2>&1 || true
+  noctalia msg dock-show >/dev/null 2>&1 || true
+}
+
 exit_screensaver() {
   set_mouse_reporting 0
   [[ ${HIDE_CURSOR} == 1 ]] && set_cursor_invisible 0
+  show_desktop_chrome
   pkill -x ttfx 2>/dev/null || true
   pkill -f "$(class_pattern)" 2>/dev/null || true
   exit 0
