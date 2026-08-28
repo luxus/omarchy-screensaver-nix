@@ -18,6 +18,9 @@ ANCHOR_TEXT="${ANCHOR_TEXT:-c}"
 EFFECT_MODE="${EFFECT_MODE:-random}"
 SINGLE_EFFECT="${SINGLE_EFFECT:-}"
 HIDE_CURSOR="${HIDE_CURSOR:-1}"
+INCLUDE_EFFECTS=("${INCLUDE_EFFECTS[@]+"${INCLUDE_EFFECTS[@]}"}")
+EXCLUDE_EFFECTS=("${EXCLUDE_EFFECTS[@]+"${EXCLUDE_EFFECTS[@]}"}")
+EXTRA_TTFX_ARGS=("${EXTRA_TTFX_ARGS[@]+"${EXTRA_TTFX_ARGS[@]}"}")
 
 class_pattern() {
   local c="$WINDOW_CLASS"
@@ -76,7 +79,6 @@ trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
 printf '\033]11;rgb:00/00/00\007'
 
 [[ ${HIDE_CURSOR} == 1 ]] && set_cursor_invisible 1
-set_mouse_reporting 1
 
 tty=$(tty 2>/dev/null || true)
 
@@ -90,6 +92,10 @@ wait_for_terminal_resize() {
 }
 
 wait_for_terminal_resize
+# Fullscreen map under the existing pointer synthesizes motion. Arm mouse
+# reporting only after that, or the first event dismisses immediately.
+grace_deadline=$((SECONDS + 1))
+mouse_armed=0
 
 build_ttfx_args() {
   TTFX_CMD=(ttfx -i "$ART_FILE"
@@ -110,15 +116,15 @@ build_ttfx_args() {
     TTFX_CMD+=("$SINGLE_EFFECT")
   else
     TTFX_CMD+=(--random-effect)
-    if ((${#INCLUDE_EFFECTS[@]:-0} > 0)); then
+    if ((${#INCLUDE_EFFECTS[@]} > 0)); then
       TTFX_CMD+=(--include-effects "${INCLUDE_EFFECTS[@]}")
     fi
-    if ((${#EXCLUDE_EFFECTS[@]:-0} > 0)); then
+    if ((${#EXCLUDE_EFFECTS[@]} > 0)); then
       TTFX_CMD+=(--exclude-effects "${EXCLUDE_EFFECTS[@]}")
     fi
   fi
 
-  if ((${#EXTRA_TTFX_ARGS[@]:-0} > 0)); then
+  if ((${#EXTRA_TTFX_ARGS[@]} > 0)); then
     TTFX_CMD+=("${EXTRA_TTFX_ARGS[@]}")
   fi
 }
@@ -130,17 +136,33 @@ fi
 
 build_ttfx_args
 
+arm_input() {
+  if ((mouse_armed == 0 && SECONDS >= grace_deadline)); then
+    set_mouse_reporting 1
+    mouse_armed=1
+  fi
+}
+
 while true; do
   "${TTFX_CMD[@]}" &
 
   if [[ -n ${tty:-} ]]; then
     while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null 2>&1; do
+      arm_input
+      if ((mouse_armed == 0)); then
+        read -n1 -t 0.2 || true
+        continue
+      fi
       if read -n1 -t 1 || ! screensaver_in_focus; then
         exit_screensaver
       fi
     done
   else
     wait $! || true
+    arm_input
+    if ((mouse_armed == 0)); then
+      continue
+    fi
     if read -n1 -t 1; then
       exit_screensaver
     fi

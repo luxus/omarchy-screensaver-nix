@@ -171,7 +171,8 @@ spawn_detached() {
   if [[ $terminal == kitty ]]; then
     "${TERM_CMD[@]}"
   else
-    nohup "${TERM_CMD[@]}" >/dev/null 2>&1 &
+    mkdir -p "$STATE_DIR"
+    nohup "${TERM_CMD[@]}" >>"$STATE_DIR/last-launch.log" 2>&1 &
     disown $! 2>/dev/null || true
   fi
 }
